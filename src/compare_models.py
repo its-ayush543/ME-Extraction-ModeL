@@ -1,79 +1,105 @@
 import torch
-import torch.nn as nn
-from torch.utils.data import TensorDataset, DataLoader
-from target_model import SurrogateNet
+import torch.nn.functional as F
+from sklearn.metrics import accuracy_score
+from torch.utils.data import TensorDataset, DataLoader, Subset
 import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.metrics import accuracy_score, confusion_matrix
+import numpy as np
 import os
+import random
 
-# Load test data
-embeddings = torch.load("embeddings/face_embeddings.pt")
-labels = torch.load("embeddings/face_labels.pt")
+class SurrogateMLP(torch.nn.Module):
+    def __init__(self, input_size=512, hidden_size=256, output_size=62):
+        super(SurrogateMLP, self).__init__()
+        self.classifier = torch.nn.Sequential(
+            torch.nn.Linear(input_size, hidden_size),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(0.3),
+            torch.nn.Linear(hidden_size, output_size)
+        )
 
-# Encode labels
-from sklearn.preprocessing import LabelEncoder
-label_encoder = LabelEncoder()
-labels_encoded = torch.tensor(label_encoder.fit_transform(labels))
-
-# Train-test split
-from sklearn.model_selection import train_test_split
-_, X_test, _, y_test = train_test_split(embeddings, labels_encoded, test_size=0.2, stratify=labels_encoded)
-test_loader = DataLoader(TensorDataset(X_test, y_test), batch_size=64)
+    def forward(self, x):
+        return self.classifier(x)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
 
-# Helper to load and evaluate a model
-def evaluate_model(model_path, model_name):
-    model = SurrogateNet(output_size=len(label_encoder.classes_)).to(device)
-    model.load_state_dict(torch.load(model_path, map_location=device))
-    model.eval()
+# Load data
+embeddings = torch.load("stolen_embeddings.pt").to(device)
+labels = torch.load("stolen_labels.pt").to(device)
 
-    all_preds, all_labels = [], []
+# Full dataset
+dataset = TensorDataset(embeddings, labels)
+
+# Load models
+target_model = SurrogateMLP(output_size=62).to(device)
+stolen_model = SurrogateMLP(output_size=62).to(device)
+
+target_model.load_state_dict(torch.load("models/target_model.pt", map_location=device))
+stolen_model.load_state_dict(torch.load("models/surrogate_model.pt", map_location=device))
+
+target_model.eval()
+stolen_model.eval()
+
+# Sample sizes (percentages of total dataset)
+sample_percents = [0.1, 0.3, 0.5, 0.7, 1.0]
+accuracies = []
+fidelities = []
+
+for percent in sample_percents:
+    size = int(len(dataset) * percent)
+    indices = random.sample(range(len(dataset)), size)
+    subset = Subset(dataset, indices)
+    loader = DataLoader(subset, batch_size=64, shuffle=False)
+
+    true_labels = []
+    target_preds = []
+    stolen_preds = []
+
     with torch.no_grad():
-        for x, y in test_loader:
+        for x, y in loader:
             x, y = x.to(device), y.to(device)
-            preds = model(x)
-            all_preds.extend(torch.argmax(preds, dim=1).cpu().numpy())
-            all_labels.extend(y.cpu().numpy())
+            true_labels.extend(y.cpu().numpy())
 
-    acc = accuracy_score(all_labels, all_preds)
-    cm = confusion_matrix(all_labels, all_preds)
-    return acc, cm
+            t_logits = target_model(x)
+            s_logits = stolen_model(x)
 
-# Paths
-original_path = os.path.join("models", "surrogate_model.pt")
-stolen_path = os.path.join("models", "stolen_surrogate_model.pt")
+            t_pred = torch.argmax(t_logits, dim=1)
+            s_pred = torch.argmax(s_logits, dim=1)
 
-# Evaluate both models
-original_acc, original_cm = evaluate_model(original_path, "Original")
-stolen_acc, stolen_cm = evaluate_model(stolen_path, "Stolen")
+            target_preds.extend(t_pred.cpu().numpy())
+            stolen_preds.extend(s_pred.cpu().numpy())
 
-# Print accuracy
-print(f"Original Model Accuracy: {original_acc * 100:.2f}%")
-print(f"Stolen Model Accuracy: {stolen_acc * 100:.2f}%")
+    y_true = np.array(true_labels)
+    t_pred = np.array(target_preds)
+    s_pred = np.array(stolen_preds)
 
-# Bar chart comparison
-plt.figure(figsize=(6, 4))
-plt.bar(["Original", "Stolen"], [original_acc * 100, stolen_acc * 100], color=["blue", "red"])
-plt.ylabel("Accuracy (%)")
-plt.title("Model Accuracy Comparison")
-plt.ylim(0, 100)
-plt.grid(True, linestyle='--', alpha=0.5)
-plt.tight_layout()
-plt.savefig("comparison_accuracy.png")
+    accuracy = accuracy_score(y_true, s_pred)
+    fidelity = np.mean(t_pred == s_pred)
+
+    accuracies.append(accuracy)
+    fidelities.append(fidelity)
+
+    print(f"[{int(percent * 100)}% Data] Accuracy: {accuracy:.4f}, Fidelity: {fidelity:.4f}")
+
+# Plotting
+plt.figure(figsize=(7, 5))
+plt.plot(fidelities, accuracies, marker='o', linestyle='-', color='blue')
+for i, p in enumerate(sample_percents):
+    plt.text(fidelities[i], accuracies[i], f"{int(p*100)}%", fontsize=9, ha='right')
+
+plt.title("Accuracy vs Fidelity (varying data size)")
+plt.xlabel("Fidelity")
+plt.ylabel("Accuracy")
+plt.grid(True)
+os.makedirs("results", exist_ok=True)
+plt.savefig("results/accuracy_vs_fidelity_multiple.png")
 plt.show()
 
-# Optional: Confusion matrices
-plt.figure(figsize=(12, 5))
-plt.subplot(1, 2, 1)
-sns.heatmap(original_cm, cmap="Blues", cbar=False, xticklabels=False, yticklabels=False)
-plt.title("Original Model Confusion Matrix")
-
-plt.subplot(1, 2, 2)
-sns.heatmap(stolen_cm, cmap="Reds", cbar=False, xticklabels=False, yticklabels=False)
-plt.title("Stolen Model Confusion Matrix")
-
-plt.tight_layout()
-plt.savefig("confusion_matrices.png")
-plt.show()
+# Optional: Save results to CSV
+import pandas as pd
+df = pd.DataFrame({
+    "SampleSizePercent": [int(p*100) for p in sample_percents],
+    "Accuracy": accuracies,
+    "Fidelity": fidelities
+})
+df.to_csv("results/accuracy_vs_fidelity_multiple.csv", index=False)

@@ -22,7 +22,7 @@ class TargetModel:
 
         # Load trained model
         model_path = os.path.join("models", "surrogate_model.pt")
-        self.model = SurrogateMLP(output_size=62).to(self.device)
+        self.model = SurrogateNet(output_size=62).to(self.device)
         state_dict = torch.load(model_path, map_location=self.device)
         self.model.load_state_dict(state_dict)
         self.model.eval()
