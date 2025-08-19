@@ -10,9 +10,9 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
 # Paths
-data_dir = 'lfw_faces'  # folder containing subfolders of each person
-embedding_file = 'face_embeddings.pt'
-label_file = 'face_labels.pt'
+data_dir = 'data/lfw_faces'  # folder containing subfolders of each person
+embedding_file = 'embeddings/face_embeddings.pt'
+label_file = 'embeddings/face_labels.pt'
 
 # Initialize MTCNN (for face detection + alignment) and InceptionResnetV1 (for embedding)
 mtcnn = MTCNN(image_size=160, margin=0, min_face_size=20, keep_all=False, device=device)

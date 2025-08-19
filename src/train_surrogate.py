@@ -5,8 +5,8 @@ from torch.utils.data import TensorDataset, DataLoader
 import os
 
 # Load embeddings and labels
-embeddings = torch.load("face_embeddings.pt")
-labels = torch.load("face_labels.pt")
+embeddings = torch.load("embeddings/face_embeddings.pt")
+labels = torch.load("embeddings/face_labels.pt")
 
 # Encode labels numerically
 from sklearn.preprocessing import LabelEncoder
